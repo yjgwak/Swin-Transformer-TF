@@ -1,1 +1,1 @@
-from .model import SwinTransformer
+from .model import SwinTransformer, SwinTransformerV2
