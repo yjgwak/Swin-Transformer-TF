@@ -643,11 +643,14 @@ class SwinTransformerModel(tf.keras.Model):
                                                             use_checkpoint=use_checkpoint,
                                                             prefix=f'layers{i_layer}') for i_layer in
                                                  range(self.num_layers)])
-        self.norm = norm_layer(epsilon=1e-5, name='norm')
-        self.avgpool = GlobalAveragePooling1D()
+
         if self.include_top:
+            self.norm = norm_layer(epsilon=1e-5, name='norm')
+            self.avgpool = GlobalAveragePooling1D()
             self.head = Dense(num_classes, name='head')
         else:
+            self.norm = None
+            self.avgpool = None
             self.head = None
 
     def forward_features(self, x):
@@ -655,15 +658,15 @@ class SwinTransformerModel(tf.keras.Model):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
-
         x = self.basic_layers(x)
-        x = self.norm(x)
-        x = self.avgpool(x)
+
         return x
 
     def call(self, x):
         x = self.forward_features(x)
         if self.include_top:
+            x = self.norm(x)
+            x = self.avgpool(x)
             x = self.head(x)
         return x
 
@@ -696,7 +699,7 @@ class SwinTransformerV2Model(tf.keras.Model):
         patches_resolution = self.patch_embed.patches_resolution
         self.patches_resolution = patches_resolution
 
-        # absolute postion embedding
+        # absolute position embedding
         if self.ape:
             self.absolute_pos_embed = self.add_weight('absolute_pos_embed',
                                                       shape=(
@@ -728,11 +731,12 @@ class SwinTransformerV2Model(tf.keras.Model):
                                                               use_checkpoint=use_checkpoint,
                                                               prefix=f'layers{i_layer}') for i_layer in
                                                  range(self.num_layers)])
-        self.norm = norm_layer(epsilon=1e-5, name='norm')
-        self.avgpool = GlobalAveragePooling1D()
+
         if self.include_top:
+            self.avgpool = GlobalAveragePooling1D()
             self.head = Dense(num_classes, name='head')
         else:
+            self.avgpool = None
             self.head = None
 
     def forward_features(self, x):
@@ -740,15 +744,13 @@ class SwinTransformerV2Model(tf.keras.Model):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
-
         x = self.basic_layers(x)
-        x = self.norm(x)
-        x = self.avgpool(x)
         return x
 
     def call(self, x):
         x = self.forward_features(x)
         if self.include_top:
+            x = self.avgpool(x)
             x = self.head(x)
         return x
 
