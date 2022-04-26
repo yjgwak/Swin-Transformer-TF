@@ -2,7 +2,6 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Dropout, Conv2D, LayerNormalization, GlobalAveragePooling1D
 
-# TODO: implement configuration with meta_network_hidden_features values
 CFGS = {
     'swin_tiny_224': dict(input_size=(224, 224), window_size=7, embed_dim=96, depths=[2, 2, 6, 2],
                           num_heads=[3, 6, 12, 24]),
@@ -12,17 +11,17 @@ CFGS = {
                           num_heads=[4, 8, 16, 32]),
     'swin_base_384': dict(input_size=(384, 384), window_size=12, embed_dim=128, depths=[2, 2, 18, 2],
                           num_heads=[4, 8, 16, 32]),
+    'swin_base_512': dict(input_size=(512, 512), window_size=16, embed_dim=128, depths=[2, 2, 18, 2],
+                          num_heads=[4, 8, 16, 32]),
     'swin_large_224': dict(input_size=(224, 224), window_size=7, embed_dim=192, depths=[2, 2, 18, 2],
                            num_heads=[6, 12, 24, 48]),
     'swin_large_384': dict(input_size=(384, 384), window_size=12, embed_dim=192, depths=[2, 2, 18, 2],
                            num_heads=[6, 12, 24, 48]),
     'swin_large_512': dict(input_size=(512, 512), window_size=16, embed_dim=192, depths=[2, 2, 18, 2],
                            num_heads=[6, 12, 24, 48]),
-    # SwinV2-T: C = 96, #. block = {2, 2, 6, 2}
-    # SwinV2-S/B/L: C=96/128/192, #.block={2, 2, 18, 2}
-    # with C the number of channels in the first stage
 }
 
+CFGS.update({'swin_v2_' + '_'.join(k.split('_')[1:]): v for k, v in CFGS.items()})
 
 class Mlp(tf.keras.layers.Layer):
     def __init__(self, in_features, hidden_features=None, out_features=None, drop=0., prefix=''):
@@ -157,14 +156,25 @@ class WindowAttentionV2(tf.keras.layers.Layer):
         self.tau = self.add_weight(f'{self.prefix}/attn/tau',
                                    shape=(1, self.num_heads, 1, 1),
                                    initializer=tf.initializers.Ones(), trainable=True)
-
-        coords_h = tf.range(self.window_size[0])
-        coords_w = tf.range(self.window_size[1])
-        coords = tf.stack(tf.meshgrid(coords_h, coords_w, indexing='ij'))
-        coords_flatten = tf.reshape(coords, shape=(2, -1))  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = tf.cast(tf.reshape(tf.transpose(relative_coords, perm=[1, 2, 0]), shape=(-1, 2)), dtype=tf.float32)
-        self.relative_coords_log = tf.sign(relative_coords) * tf.math.log(1. + tf.math.abs(relative_coords))
+        # numpy start
+        coords_h = np.arange(self.window_size[0])
+        coords_w = np.arange(self.window_size[1])
+        coords = np.stack(np.meshgrid(coords_h, coords_w, indexing='ij'))
+        coords_flatten = coords.reshape(2, -1)
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        relative_coords = relative_coords.transpose(1, 2, 0).reshape(-1, 2).astype(np.float32)
+        relative_coords_log = np.sign(relative_coords) * np.log(1. + np.abs(relative_coords))
+        self.relative_coords_log = tf.Variable(initial_value=tf.convert_to_tensor(relative_coords_log),
+                                               trainable=False,
+                                               name=f'{self.prefix}/attn/relative_coords_log')
+        # check whether there exsits memory issue
+        # coords_h = tf.range(self.window_size[0])
+        # coords_w = tf.range(self.window_size[1])
+        # coords = tf.stack(tf.meshgrid(coords_h, coords_w, indexing='ij'))
+        # coords_flatten = tf.reshape(coords, shape=(2, -1))  # 2, Wh*Ww
+        # relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        # relative_coords = tf.cast(tf.reshape(tf.transpose(relative_coords, perm=[1, 2, 0]), shape=(-1, 2)), dtype=tf.float32)
+        # self.relative_coords_log = tf.sign(relative_coords) * tf.math.log(1. + tf.math.abs(relative_coords))
         self.built = True
 
     def call(self, x, mask=None):
@@ -172,7 +182,7 @@ class WindowAttentionV2(tf.keras.layers.Layer):
         qkv = tf.transpose(tf.reshape(self.qkv(x),
                                       shape=[-1, N, 3, self.num_heads, C // self.num_heads]),
                            perm=[2, 0, 3, 1, 4])
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        q, k, v = qkv[0], qkv[1], qkv[2] # (3, -1, self.num_heads, N, C // self_num_head)
 
         k = tf.math.l2_normalize(tf.transpose(k, perm=[0, 1, 3, 2]), axis=-1)
         attn = (tf.math.l2_normalize(q, axis=-1) @ k) / tf.clip_by_value(self.tau, 1e-2, tf.float32.max)
